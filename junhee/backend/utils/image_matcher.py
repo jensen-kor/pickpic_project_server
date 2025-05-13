@@ -11,7 +11,7 @@ def find_similar_images_by_clip(text: str, image_dir: str, features_dir: str, to
     모든 키워드에 해당하는 이미지를 top_n개씩 합쳐서 반환 (중복 제거, 유사도는 최대값)
     """
     try:
-        from transformers import CLIPProcessor, CLIPModel
+        from transformers import SiglipProcessor, SiglipModel
     except ImportError:
         raise ImportError('transformers, torch 패키지가 필요합니다.')
     try:
@@ -20,8 +20,8 @@ def find_similar_images_by_clip(text: str, image_dir: str, features_dir: str, to
         raise ImportError('googletrans 패키지가 필요합니다. (pip install googletrans==4.0.0-rc1)')
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    model = CLIPModel.from_pretrained('openai/clip-vit-large-patch14').to(device)
-    processor = CLIPProcessor.from_pretrained('openai/clip-vit-large-patch14', use_fast=False)
+    model = SiglipModel.from_pretrained('google/siglip-so400m-patch14-384').to(device)
+    processor = SiglipProcessor.from_pretrained('google/siglip-so400m-patch14-384')
 
     # 이미지 임베딩(.npy) 파일 목록
     feature_files = [f for f in os.listdir(features_dir) if f.endswith('.npy')]
@@ -39,49 +39,58 @@ def find_similar_images_by_clip(text: str, image_dir: str, features_dir: str, to
         except Exception:
             translated_keywords.append(kw)  # 번역 실패시 원본 사용
 
-    image_scores = dict()  # {파일명: (유사도, 번역된 키워드)}
+    # 이미지별로 {파일명: [(원본키워드, 번역키워드, 유사도), ...]} 저장
+    image_keyword_scores = dict()
 
     for idx, keyword in enumerate(translated_keywords):
-        # 텍스트 임베딩 추출
         inputs = processor(text=[keyword], return_tensors="pt", padding=True).to(device)
         with torch.no_grad():
             text_features = model.get_text_features(**inputs).cpu().numpy()[0]
 
-        similarities = []
         for feat_file in feature_files:
             img_feature = np.load(os.path.join(features_dir, feat_file))
             sim = np.dot(text_features, img_feature) / (np.linalg.norm(text_features) * np.linalg.norm(img_feature))
-            similarities.append((feat_file.replace('.npy', ''), sim))
-
-        similarities.sort(key=lambda x: x[1], reverse=True)
-        for fname, score in similarities[:top_n]:
-            if score < similarity_threshold:
+            if sim < similarity_threshold:
                 continue
-            # 여러 키워드에 걸릴 경우 더 높은 유사도로 갱신
-            if fname not in image_scores or image_scores[fname][0] < score:
-                image_scores[fname] = (score, keywords[idx], keyword)  # (유사도, 원본, 번역)
+            fname = feat_file.replace('.npy', '')
+            if fname not in image_keyword_scores:
+                image_keyword_scores[fname] = []
+            image_keyword_scores[fname].append((keywords[idx], keyword, sim))
 
-    # 유사도 내림차순 정렬
-    sorted_images = sorted(image_scores.items(), key=lambda x: x[1][0], reverse=True)
+    # 정렬: 1) 매칭 키워드 개수 내림차순, 2) 유사도 합 내림차순
+    sorted_images = sorted(
+        image_keyword_scores.items(),
+        key=lambda x: (len(x[1]), sum([s[2] for s in x[1]])),
+        reverse=True
+    )
+
     results = []
-    for fname, (score, orig_keyword, trans_keyword) in sorted_images:
+    for fname, matches in sorted_images[:top_n]:
         img_path = os.path.join(image_dir, fname)
         if not os.path.exists(img_path):
             continue
         with open(img_path, 'rb') as f:
             img_base64 = base64.b64encode(f.read()).decode('utf-8')
-        results.append({'filename': fname, 'base64': img_base64, 'score': float(score), 'matched_keyword': orig_keyword, 'translated_keyword': trans_keyword})
+        results.append({
+            'filename': fname,
+            'base64': img_base64,
+            'matched_keywords': [m[0] for m in matches],
+            'translated_keywords': [m[1] for m in matches],
+            'scores': [float(m[2]) for m in matches],
+            'matched_count': len(matches),
+            'score_sum': float(sum([m[2] for m in matches]))
+        })
     return results if results else None
 
 def save_clip_image_features(image_dir: str, features_dir: str):
     try:
-        from transformers import CLIPProcessor, CLIPModel
+        from transformers import SiglipProcessor, SiglipModel
     except ImportError:
         raise ImportError('transformers, torch 패키지가 필요합니다.')
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    model = CLIPModel.from_pretrained('openai/clip-vit-large-patch14').to(device)
-    processor = CLIPProcessor.from_pretrained('openai/clip-vit-large-patch14', use_fast=False)
+    model = SiglipModel.from_pretrained('google/siglip-so400m-patch14-384').to(device)
+    processor = SiglipProcessor.from_pretrained('google/siglip-so400m-patch14-384')
 
     os.makedirs(features_dir, exist_ok=True)
     image_files = [f for f in os.listdir(image_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
@@ -107,18 +116,18 @@ def save_clip_image_features(image_dir: str, features_dir: str):
 if __name__ == "__main__":
     image_dir = "./backend/user_photos"
     features_dir = "./backend/features"
-    query = "원숭이"
+    query = "고양이 강아지"
     top_n = 5
-    similarity_threshold = 0.2
+    similarity_threshold = 0.086
 
     results = find_similar_images_by_clip(query, image_dir, features_dir, top_n=top_n, similarity_threshold=similarity_threshold)
     if not results:
         print("유사한 이미지가 없습니다.")
     else:
         for r in results:
-            print(f"파일명: {r['filename']}, 유사도: {r['score']:.4f}, 매칭 키워드: {r['matched_keyword']}, 번역된 키워드: {r['translated_keyword']}")
+            print(f"파일명: {r['filename']}, 매칭 키워드: {r['matched_keywords']}, 유사도: {r['scores']}")
             img_path = os.path.join(image_dir, r['filename'])
             img = Image.open(img_path)
             img.show()
 
-    save_clip_image_features(image_dir, features_dir) 
+    # save_clip_image_features(image_dir, features_dir) 
