@@ -84,16 +84,23 @@ def save_clip_image_features(image_dir: str, features_dir: str):
 if __name__ == "__main__":
     image_dir = "./backend/user_photos"
     features_dir = "./backend/features"
-    query = "강아지 고양이"
+    query = "고양이"
     top_n = 5
+    similarity_threshold = 0.25  # 원하는 임계값(예: 0.25)로 설정
+
     results = find_similar_images_by_clip(query, image_dir, features_dir, top_n=top_n)
     if not results:
         print("유사한 이미지가 없습니다.")
     else:
+        found = False
         for r in results:
-            print(f"파일명: {r['filename']}, 유사도: {r['score']:.6f}")
-            img_path = os.path.join(image_dir, r['filename'])
-            img = Image.open(img_path)
-            img.show()
+            if r['score'] >= similarity_threshold:
+                print(f"파일명: {r['filename']}, 유사도: {r['score']:.4f}")
+                img_path = os.path.join(image_dir, r['filename'])
+                img = Image.open(img_path)
+                img.show()
+                found = True
+        if not found:
+            print(f"유사도 {similarity_threshold} 이상인 이미지는 없습니다.")
 
     save_clip_image_features(image_dir, features_dir) 
