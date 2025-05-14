@@ -96,6 +96,12 @@ def save_clip_image_features(image_dir: str, features_dir: str):
     image_files = [f for f in os.listdir(image_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
 
     for fname in image_files:
+        feature_path = os.path.join(features_dir, fname + ".npy")
+        if os.path.exists(feature_path):
+            # 이미 임베딩이 존재하면 건너뜀
+            print(f"이미 존재: {feature_path} (건너뜀)")
+            continue
+
         img_path = os.path.join(image_dir, fname)
         try:
             img = Image.open(img_path).convert('RGB')
@@ -107,8 +113,6 @@ def save_clip_image_features(image_dir: str, features_dir: str):
         with torch.no_grad():
             image_features = model.get_image_features(**inputs).cpu().numpy()[0]
 
-        # 임베딩 저장
-        feature_path = os.path.join(features_dir, fname + ".npy")
         np.save(feature_path, image_features)
         print(f"저장 완료: {feature_path}")
 
@@ -116,9 +120,9 @@ def save_clip_image_features(image_dir: str, features_dir: str):
 if __name__ == "__main__":
     image_dir = "./backend/user_photos"
     features_dir = "./backend/features"
-    query = "고양이 강아지"
+    query = "고기"
     top_n = 5
-    similarity_threshold = 0.086
+    similarity_threshold = 0.076
 
     results = find_similar_images_by_clip(query, image_dir, features_dir, top_n=top_n, similarity_threshold=similarity_threshold)
     if not results:
@@ -130,4 +134,4 @@ if __name__ == "__main__":
             img = Image.open(img_path)
             img.show()
 
-    # save_clip_image_features(image_dir, features_dir) 
+    save_clip_image_features(image_dir, features_dir) 
